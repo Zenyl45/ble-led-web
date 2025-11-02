@@ -51,6 +51,7 @@ h1 { margin: 0; }
 #settingsBtn {
   background: none; border: 1px solid var(--muted); padding: 8px 12px;
   border-radius: 10px; color: var(--muted); cursor: pointer;
+  position: fixed; top: 16px; left: 16px;
 }
 #settingsBtn:hover { border-color: var(--text); color: var(--text); }
 
@@ -69,6 +70,11 @@ h1 { margin: 0; }
   display: flex; gap: 10px; margin-top: 16px;
 }
 .modal-box button { flex: 1; }
+.status {
+  color: var(--muted);
+  margin-top: 8px;
+  font-size: 0.9rem;
+}
 </style>
 </head>
 <body>
@@ -87,11 +93,12 @@ h1 { margin: 0; }
 <div id="main" class="hidden">
   <header>
     <h1>BLE LED Controller</h1>
-    <button id="settingsBtn">⚙️ Paramètres</button>
   </header>
+
+  <button id="settingsBtn">⚙️</button>
   <p>🎇 Nombre de LEDs configuré : <strong id="ledDisplay"></strong></p>
   <button id="connectBtn">Se connecter à l'ESP32</button>
-  <!-- Ici tu mettras ta palette, sliders, etc. -->
+  <p class="status" id="status">Déconnecté</p>
 </div>
 
 <!-- ⚙️ Modale Paramètres -->
@@ -108,56 +115,87 @@ h1 { margin: 0; }
 </div>
 
 <script>
-// ===== Initialisation =====
-const setupEl = document.getElementById('setup');
-const mainEl = document.getElementById('main');
-const ledDisplay = document.getElementById('ledDisplay');
-const settingsModal = document.getElementById('settingsModal');
+// ======= Variables BLE =======
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const RX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+let device, server, service, rxChar;
 
-// Vérifie si une config existe déjà
+// ======= Utilitaires =======
+const $ = id => document.getElementById(id);
+const setStatus = t => $('status').textContent = t;
+
+// ======= Initialisation =======
 window.addEventListener('DOMContentLoaded', () => {
   const leds = localStorage.getItem('ledCount');
   if (leds) {
-    ledDisplay.textContent = leds;
-    setupEl.classList.add('hidden');
-    mainEl.classList.remove('hidden');
+    $('ledDisplay').textContent = leds;
+    $('setup').classList.add('hidden');
+    $('main').classList.remove('hidden');
   }
 });
 
-// ===== Écran de setup =====
-document.getElementById('saveSetup').addEventListener('click', () => {
-  const count = parseInt(document.getElementById('ledCount').value);
+// ======= Écran de setup =======
+$('saveSetup').addEventListener('click', () => {
+  const count = parseInt($('ledCount').value);
   if (!count || count <= 0) return alert('Entre un nombre valide !');
   localStorage.setItem('ledCount', count);
-  ledDisplay.textContent = count;
-  setupEl.classList.add('hidden');
-  mainEl.classList.remove('hidden');
+  $('ledDisplay').textContent = count;
+  $('setup').classList.add('hidden');
+  $('main').classList.remove('hidden');
 });
 
-// ===== Paramètres =====
-document.getElementById('settingsBtn').addEventListener('click', () => {
+// ======= Paramètres =======
+$('settingsBtn').addEventListener('click', () => {
   const current = localStorage.getItem('ledCount') || '';
-  document.getElementById('ledCountEdit').value = current;
-  settingsModal.classList.remove('hidden');
+  $('ledCountEdit').value = current;
+  $('settingsModal').classList.remove('hidden');
 });
 
-document.getElementById('closeSettings').addEventListener('click', () => {
-  settingsModal.classList.add('hidden');
+$('closeSettings').addEventListener('click', () => {
+  $('settingsModal').classList.add('hidden');
 });
 
-document.getElementById('saveSettings').addEventListener('click', () => {
-  const newVal = parseInt(document.getElementById('ledCountEdit').value);
+$('saveSettings').addEventListener('click', () => {
+  const newVal = parseInt($('ledCountEdit').value);
   if (!newVal || newVal <= 0) return alert('Nombre invalide');
   localStorage.setItem('ledCount', newVal);
-  ledDisplay.textContent = newVal;
-  settingsModal.classList.add('hidden');
+  $('ledDisplay').textContent = newVal;
+  $('settingsModal').classList.add('hidden');
   alert('✅ Paramètres enregistrés !');
 });
 
-// ===== BLE (placeholder pour plus tard) =====
-document.getElementById('connectBtn').addEventListener('click', () => {
-  alert('Connexion BLE sera ajoutée ici 😉');
-});
+// ======= Connexion BLE =======
+async function connectBLE() {
+  try {
+    setStatus('🔍 Recherche du périphérique...');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE_UUID] }]
+    });
+    setStatus('🔗 Connexion en cours...');
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(SERVICE_UUID);
+    rxChar = await service.getCharacteristic(RX_UUID);
+
+    setStatus('✅ Connecté à ' + (device.name || 'ESP32'));
+
+    // Envoyer le nombre de LEDs
+    const leds = parseInt(localStorage.getItem('ledCount') || 0);
+    if (rxChar && leds > 0) {
+      const data = new Uint8Array([0x06, leds & 0xFF, (leds >> 8) & 0xFF]);
+      await rxChar.writeValueWithoutResponse(data);
+      console.log('Envoi config LEDs:', data);
+    }
+
+    device.addEventListener('gattserverdisconnected', () => {
+      setStatus('❌ Déconnecté');
+    });
+  } catch (e) {
+    console.error(e);
+    setStatus('⚠️ Erreur connexion BLE');
+  }
+}
+
+$('connectBtn').addEventListener('click', connectBLE);
 </script>
 </body>
 </html>
